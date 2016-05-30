@@ -27,7 +27,18 @@ using System.Runtime.InteropServices;
 namespace TidyManaged.Interop
 {
 	internal class PInvoke
-	{
+    {
+        static PInvoke()
+        {
+            // Detect if the system is runnning at 32 or 64 bit and load the corresponding tidy.dll
+            var is64 = IntPtr.Size == 8;
+            var libraryPath = System.IO.Path.Combine(is64 ? "x64" : "x86", "tidy.dll");
+            LoadLibrary(libraryPath);
+        }
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LoadLibrary(string dllToLoad);
+
 		[DllImport("tidy.dll")]
 		internal static extern IntPtr tidyCreate();
 
