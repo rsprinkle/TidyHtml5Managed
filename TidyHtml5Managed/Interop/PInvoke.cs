@@ -26,10 +26,35 @@ using System.Runtime.InteropServices;
 
 namespace TidyManaged.Interop
 {
+	// http://api.html-tidy.org/tidy/tidylib_api_5.2.0/tidylib.html#return_code
+	/// <summary>
+	/// For all API funcs unless other stated; negative means severe error (usually equals to -errno)
+	/// </summary>
+	public enum ReturnCode
+	{
+		Good,
+		Warnings,
+
+		/// <summary>
+		/// By default, Tidy will not produce output. You can force output with the TidyForceOutput option. As with warnings, check error buffer or track error messages for details.
+		/// </summary>
+		Errors
+	}
+
+	[StructLayout(LayoutKind.Sequential, Pack = 4)]
+	internal struct TidyBuffer
+	{
+		internal IntPtr allocator;  /**< Memory allocator */
+		internal IntPtr bp;           /**< Pointer to bytes */
+		internal uint size;         /**< # bytes currently in use */
+		internal uint allocated;    /**< # bytes allocated */
+		internal uint next;         /**< Offset of current input position */
+	}
+
 	internal class PInvoke
-    {
-        static PInvoke()
-        {
+	{
+		static PInvoke()
+		{
             // Detect if the system is runnning at 32 or 64 bit and load the corresponding tidy.dll
             var is64 = IntPtr.Size == 8;
             var libraryPath = System.IO.Path.Combine(is64 ? "x64" : "x86", "tidy.dll");
@@ -69,7 +94,18 @@ namespace TidyManaged.Interop
 		[DllImport("tidy.dll")]
 		internal static extern bool tidyOptSetBool(IntPtr tdoc, TidyOptionId optId, bool val);
 
-		[DllImport("tidy.dll")]
+        // TIDY_EXPORT void TIDY_CALL tidyBufFree(TidyBuffer* buf);
+        /// <summary>
+        /// Free current contents and zero out
+        /// </summary>
+        /// <param name="tdoc"></param>
+        /// <param name="buffer"></param>
+        /// <param name="buflen"></param>
+        /// <returns></returns>
+        [DllImport("tidy.dll")]
+        internal static extern void tidyBufFree(ref TidyBuffer buf);
+
+        [DllImport("tidy.dll")]
 		internal static extern int tidyParseFile(IntPtr tdoc, string filename);
 
 		[DllImport("tidy.dll")]
@@ -82,15 +118,24 @@ namespace TidyManaged.Interop
 		internal static extern int tidyCleanAndRepair(IntPtr tdoc);
 
 		[DllImport("tidy.dll")]
-		internal static extern int tidySaveFile(IntPtr tdoc, string filname);
+		internal static extern int tidySaveFile(IntPtr tdoc, string filename);
 
+		// // int TIDY_CALL        tidySaveString( TidyDoc tdoc, tmbstr buffer, uint* buflen )
 		[DllImport("tidy.dll")]
 		internal static extern int tidySaveString(IntPtr tdoc, IntPtr buffer, ref uint buflen);
 
 		[DllImport("tidy.dll")]
 		internal static extern int tidySaveSink(IntPtr tdoc, ref TidyOutputSink sink);
 
-		internal static string tidyOptGetValueString(IntPtr tdoc, TidyOptionId optId)
+		// int TIDY_CALL    tidySetErrorBuffer(TidyDoc tdoc, TidyBuffer* errbuf)
+		[DllImport("tidy.dll")]
+		internal static extern int tidySetErrorBuffer(IntPtr tdoc, ref TidyBuffer buffer);
+
+        // FILE* TIDY_CALL   tidySetErrorFile(TidyDoc tdoc, ctmbstr errfilnam)
+        [DllImport("tidy.dll")]
+        internal static extern IntPtr tidySetErrorFile(IntPtr tdoc, string filename);
+
+        internal static string tidyOptGetValueString(IntPtr tdoc, TidyOptionId optId)
 		{
 			return Marshal.PtrToStringAnsi(tidyOptGetValue(tdoc, optId));
 		}
