@@ -225,8 +225,8 @@ namespace TidyManaged
 		/// </summary>
 		public DocTypeMode DocType
 		{
-			get { return (DocTypeMode) PInvoke.tidyOptGetInt(this.handle, TidyOptionId.TidyDoctypeMode); }
-			set { PInvoke.tidyOptSetInt(this.handle, TidyOptionId.TidyDoctypeMode, (uint) value); }
+			get { return (DocTypeMode)PInvoke.tidyOptGetInt(this.handle, TidyOptionId.TidyDoctype); }
+			set { PInvoke.tidyOptSetInt(this.handle, TidyOptionId.TidyDoctype, (uint)value); }
 		}
 
         /// <summary>
@@ -918,13 +918,86 @@ namespace TidyManaged
 
         #region Miscellaneous Options
 
+		GCHandle errBufHandle;
+		// is auto-initialized by Tidy, tidyBufInit() is optional
+		private TidyBuffer errBuf;
+
+		private bool errorBufferEnabled()
+		{
+			return errBufHandle != default(GCHandle);
+		}
+
+		/// <summary>
+		/// Output errors/warnings to memory
+		/// </summary>
+		public bool ErrorBuffer
+		{
+			get
+			{
+				return errorBufferEnabled();
+			}
+			set
+			{
+				if (value && !string.IsNullOrEmpty(ErrorFile))
+				{
+					throw new InvalidOperationException("Cannot set output to memory when file output is enabled");
+				}
+
+				var enabled = errorBufferEnabled();
+
+				if (!value && enabled)
+					FreeBuffer(ref errBuf, ref errBufHandle);
+
+				if (value)
+				{
+					if (enabled)
+						return;
+					errBufHandle = GCHandle.Alloc(errBuf, GCHandleType.Pinned);
+					PInvoke.tidySetErrorBuffer(handle, ref errBuf);
+				}
+			}
+		}
+
+		/// <summary>
+		/// Reads errors/warnings string from configured memory buffer
+		/// </summary>
+		/// <returns></returns>
+		public string GetErrors()
+		{
+			if (!ErrorBuffer) throw new InvalidOperationException("Error messages memory buffering was not enabled");
+			var buf = new byte[errBuf.size];
+			Marshal.Copy(errBuf.bp, buf, 0, (int)errBuf.size);
+			using (var ms = new MemoryStream(buf))
+				using (var sr = new StreamReader(ms)) // is default messages encoding always ASCII?
+					return sr.ReadToEnd();
+		}
+
 		/// <summary>
 		/// [error-file] Gets or sets the error file Tidy uses for errors and warnings. Normally errors and warnings are output to "stderr". Defaults to null.
 		/// </summary>
 		public string ErrorFile
 		{
-			get { return PInvoke.tidyOptGetValueString(this.handle, TidyOptionId.TidyErrFile); }
-			set { PInvoke.tidyOptSetValue(this.handle, TidyOptionId.TidyErrFile, value); }
+			get
+			{
+				return PInvoke.tidyOptGetValueString(handle, TidyOptionId.TidyErrFile);
+			}
+			set
+			{
+				if (ErrorBuffer)
+				{
+					ErrorBuffer = false;
+				}
+
+				// AlexNG could not understand how option is used in native Tidy
+				tidyOptSetValueChecked(handle, TidyOptionId.TidyErrFile, value);
+
+				// if file can't be created, message is written to "current error sink": how to get message?
+				// todo: null is not returned for invalid path, tidyCleanAndRepair() return Errors
+				if (!Directory.Exists(Path.GetDirectoryName(value)) || PInvoke.tidySetErrorFile(handle, value) == null)
+				{
+					throw new InvalidOperationException("Could not open create messages file");
+				}
+			}
 		}
 
 		/// <summary>
@@ -999,7 +1072,8 @@ namespace TidyManaged
 		/// <summary>
 		/// Parses input markup, and executes configured cleanup and repair operations.
 		/// </summary>
-		public void CleanAndRepair()
+		/// <returns>See Tidy error code convention (Interop.ReturnCode)</returns>
+		public int CleanAndRepair()
 		{
 			if (fromString)
 			{
@@ -1013,8 +1087,10 @@ namespace TidyManaged
 				InputSource input = new InputSource(this.stream);
 				PInvoke.tidyParseSource(this.handle, ref input.TidyInputSource);
 			}
-			PInvoke.tidyCleanAndRepair(this.handle);
-			cleaned = true;
+
+			int res = PInvoke.tidyCleanAndRepair(this.handle);
+			cleaned = res != (int)ReturnCode.Errors || ForceOutput;
+			return res;
 		}
 
 		/// <summary>
@@ -1026,7 +1102,7 @@ namespace TidyManaged
 			if (!cleaned)
 				throw new InvalidOperationException("CleanAndRepair() must be called before Save().");
 
-			var tempEnc = this.CharacterEncoding;			
+			var tempEnc = this.CharacterEncoding;
 			this.OutputCharacterEncoding = EncodingType.Utf8;
 
 #if SUPPORT_UTF16_ENCODINGS
@@ -1047,7 +1123,7 @@ namespace TidyManaged
 
 				htmlBytes = new byte[bufferLength];
 				handle = GCHandle.Alloc(htmlBytes, GCHandleType.Pinned);
-			} while (PInvoke.tidySaveString(this.handle, handle.AddrOfPinnedObject(), ref bufferLength) == -12);
+			} while (PInvoke.tidySaveString(this.handle, handle.AddrOfPinnedObject(), ref bufferLength) == -12); // -ENOMEM
 
 			handle.Free();
 
@@ -1057,7 +1133,9 @@ namespace TidyManaged
 			this.OutputByteOrderMark = tempBOM;
 #endif
 
-			return Encoding.UTF8.GetString(htmlBytes);
+			// Buffer is zero-padded
+			int actualLength = Array.IndexOf(htmlBytes, 0);
+			return Encoding.UTF8.GetString(htmlBytes, 0, actualLength > 0 ? actualLength : htmlBytes.Length);
 		}
 
 		/// <summary>
@@ -1165,6 +1243,11 @@ namespace TidyManaged
 			{
 				if (disposing)
 				{
+					if (errorBufferEnabled())
+					{
+						ErrorBuffer = false;
+					}
+
 					if (this.stream != null) this.stream.Dispose();
 					PInvoke.tidyRelease(this.handle);
 				}
@@ -1174,6 +1257,41 @@ namespace TidyManaged
 			}
 		}
 
-        #endregion
+		#endregion
+
+		private void FreeBuffer(ref TidyBuffer buffer, ref GCHandle handle)
+		{
+			PInvoke.tidyBufFree(ref buffer);
+			errBufHandle.Free();
+			errBufHandle = default(GCHandle);
+			buffer = default(TidyBuffer);			
+		}
+
+		private void tidyOptSetValueChecked<T>(IntPtr handle, TidyOptionId optionId, T value)
+		{
+			bool res;
+			Type t = value.GetType();
+			if (t.Equals(typeof(string)))
+				res = PInvoke.tidyOptSetValue(handle, optionId, value?.ToString());
+			else if (t.Equals(typeof(long)) || t.Equals(typeof(ulong)) || t.Equals(typeof(int)) || t.Equals(typeof(uint)) || t.Equals(typeof(short)) || t.Equals(typeof(ushort)) || t.Equals(typeof(byte)))
+			{
+				res = PInvoke.tidyOptSetInt(handle, optionId, Convert.ToUInt32(value));
+			}
+			else if (t.Equals(typeof(bool)))
+				res = PInvoke.tidyOptSetBool(handle, optionId, Convert.ToBoolean(value));
+			else throw new Exception($"Unsupported type {t}");
+
+			if (!res)
+			{
+				throw new Exception($"Setting of {optionId} with {value} failed");
+			}
+		}
+
+		public void CheckReturnCode(int code, bool throwIfWarnings = false)
+		{
+			if (code == 0 || code == (int)ReturnCode.Warnings && !throwIfWarnings)
+				return;
+			throw new InvalidOperationException("Tidy reported error code " + (code > 0 ? ((ReturnCode)code).ToString() : code.ToString()));
+		}
 	}
 }
