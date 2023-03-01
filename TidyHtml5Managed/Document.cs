@@ -39,15 +39,15 @@ namespace TidyManaged
 
 		Document()
 		{
-			this.handle = PInvoke.tidyCreate();
-			this.disposed = false;
+			handle = PInvoke.tidyCreate();
+			disposed = false;
 		}
 
 		Document(string htmlString)
 			: this()
 		{
 			this.htmlString = htmlString;
-			this.fromString = true;
+			fromString = true;
 		}
         
 		Document(Stream stream)
@@ -66,7 +66,7 @@ namespace TidyManaged
 		bool fromString;
 		bool disposed;
 		bool cleaned;
-
+		bool parsed;
         #endregion
 
         #region Properties
@@ -247,14 +247,6 @@ namespace TidyManaged
 			set { PInvoke.tidyOptSetBool(this.handle, TidyOptionId.TidyDropEmptyParas, value); }
 		}
 
-		/// <summary>
-		/// [drop-font-tags] Gets or sets whether Tidy should discard &lt;FONT&gt; and &lt;CENTER&gt; tags without creating the corresponding style rules. This option can be set independently of the MakeClean option. Defaults to false.
-		/// </summary>
-		public bool DropFontTags
-		{
-			get { return PInvoke.tidyOptGetBool(this.handle, TidyOptionId.TidyDropFontTags); }
-			set { PInvoke.tidyOptSetBool(this.handle, TidyOptionId.TidyDropFontTags, value); }
-		}
 
 		/// <summary>
 		/// [drop-proprietary-attributes] Gets or sets whether Tidy should strip out proprietary attributes, such as MS data binding attributes. Defaults to false.
@@ -335,15 +327,6 @@ namespace TidyManaged
 		{
 			get { return PInvoke.tidyOptGetBool(this.handle, TidyOptionId.TidyHideComments); }
 			set { PInvoke.tidyOptSetBool(this.handle, TidyOptionId.TidyHideComments, value); }
-		}
-
-		/// <summary>
-		/// [hide-endtags] Gets or sets whether Tidy should omit optional end-tags when generating the pretty printed markup. This option is ignored if you are outputting to XML. Defaults to false.
-		/// </summary>
-		public bool RemoveEndTags
-		{
-			get { return PInvoke.tidyOptGetBool(this.handle, TidyOptionId.TidyHideEndTags); }
-			set { PInvoke.tidyOptSetBool(this.handle, TidyOptionId.TidyHideEndTags, value); }
 		}
 
 		/// <summary>
@@ -946,7 +929,7 @@ namespace TidyManaged
 				var enabled = errorBufferEnabled();
 
 				if (!value && enabled)
-					FreeBuffer(ref errBuf, ref errBufHandle);
+					FreeBuffer(ref errBuf);
 
 				if (value)
 				{
@@ -964,9 +947,16 @@ namespace TidyManaged
 		/// <returns></returns>
 		public string GetErrors()
 		{
-			if (!ErrorBuffer) throw new InvalidOperationException("Error messages memory buffering was not enabled");
+			if (!ErrorBuffer) 
+				throw new InvalidOperationException("Error messages memory buffering was not enabled");
+
+			if (errBuf.size == 0)
+				return "";
+
 			var buf = new byte[errBuf.size];
 			Marshal.Copy(errBuf.bp, buf, 0, (int)errBuf.size);
+			var result = Encoding.Unicode.GetString(buf);
+
 			using (var ms = new MemoryStream(buf))
 				using (var sr = new StreamReader(ms)) // is default messages encoding always ASCII?
 					return sr.ReadToEnd();
@@ -1077,10 +1067,26 @@ namespace TidyManaged
 		{
 			if (fromString)
 			{
-				EncodingType tempEnc = this.InputCharacterEncoding;
-				this.InputCharacterEncoding = EncodingType.Utf8;
-				PInvoke.tidyParseString(this.handle, this.htmlString);
-				this.InputCharacterEncoding = tempEnc;
+				var buff = Encoding.UTF8.GetBytes(htmlString);
+				var bHandle = GCHandle.Alloc(buff, GCHandleType.Pinned);
+
+                var tBuffer = new TidyBuffer
+					{
+						bp = bHandle.AddrOfPinnedObject(),
+						allocated = (uint)buff.Length
+					};
+				
+                EncodingType tempEnc = this.CharacterEncoding;
+				this.CharacterEncoding = EncodingType.Utf16;
+				int res2 = PInvoke.tidyParseBuffer(handle,ref tBuffer);
+				this.CharacterEncoding = tempEnc;
+
+				bHandle.Free();
+
+				PInvoke.tidyRunDiagnostics(handle);
+				var errors = GetErrors();
+
+				parsed = res2 != (int)ReturnCode.Errors;
 			}
 			else
 			{
@@ -1103,39 +1109,28 @@ namespace TidyManaged
 				throw new InvalidOperationException("CleanAndRepair() must be called before Save().");
 
 			var tempEnc = this.CharacterEncoding;
-			this.OutputCharacterEncoding = EncodingType.Utf8;
 
 #if SUPPORT_UTF16_ENCODINGS
             var tempBOM = this.OutputByteOrderMark;
             this.OutputByteOrderMark = AutoBool.No;
 #endif
+			this.CharacterEncoding = EncodingType.Utf16;
 
-            uint bufferLength = 1;
-			byte[] htmlBytes;
-			GCHandle handle = new GCHandle();
-			do
-			{
-				// Buffer was too small - bufferLength should now be the required length, so try again...
-				if (handle.IsAllocated) handle.Free();
+			var tBuffer = new TidyBuffer();
+     		var res = PInvoke.tidySaveBuffer(this.handle, ref tBuffer);
 
-				// this setting appears to be reset by libtidy after calling tidySaveString; we need to set it each time
-				this.OutputCharacterEncoding = EncodingType.Utf8;
+			var errors = GetErrors();
 
-				htmlBytes = new byte[bufferLength];
-				handle = GCHandle.Alloc(htmlBytes, GCHandleType.Pinned);
-			} while (PInvoke.tidySaveString(this.handle, handle.AddrOfPinnedObject(), ref bufferLength) == -12); // -ENOMEM
+			if (tBuffer.size == 0)
+				return "";
 
-			handle.Free();
+            var buf = new byte[tBuffer.size];
+            Marshal.Copy(tBuffer.bp, buf, 0, (int)tBuffer.size);
+			var result = Encoding.Unicode.GetString(buf, 0, buf.Length);
 
-			this.OutputCharacterEncoding = tempEnc;
+            this.CharacterEncoding = tempEnc;
 
-#if SUPPORT_UTF16_ENCODINGS
-			this.OutputByteOrderMark = tempBOM;
-#endif
-
-			// Buffer is zero-padded
-			int actualLength = Array.IndexOf(htmlBytes, 0);
-			return Encoding.UTF8.GetString(htmlBytes, 0, actualLength > 0 ? actualLength : htmlBytes.Length);
+            return result;
 		}
 
 		/// <summary>
@@ -1229,7 +1224,7 @@ namespace TidyManaged
 		/// </summary>
 		public void Dispose()
 		{
-			this.Dispose(true);
+			Dispose(true);
 			GC.SuppressFinalize(this);
 		}
 
@@ -1239,7 +1234,7 @@ namespace TidyManaged
 		/// <param name="disposing">Indicates whether the the document is already being disposed of.</param>
 		protected virtual void Dispose(bool disposing)
 		{
-			if (!this.disposed)
+			if (!disposed)
 			{
 				if (disposing)
 				{
@@ -1248,20 +1243,24 @@ namespace TidyManaged
 						ErrorBuffer = false;
 					}
 
-					if (this.stream != null) this.stream.Dispose();
-					PInvoke.tidyRelease(this.handle);
+					if (stream != null) 
+						stream.Dispose();
+					PInvoke.tidyRelease(handle);
 				}
-				this.handle = IntPtr.Zero;
-				this.stream = null;
-				this.disposed = true;
+
+				handle = IntPtr.Zero;
+				stream = null;
+				disposed = true;
 			}
 		}
 
 		#endregion
 
-		private void FreeBuffer(ref TidyBuffer buffer, ref GCHandle handle)
+		private void FreeBuffer(ref TidyBuffer buffer)
 		{
-			PInvoke.tidyBufFree(ref buffer);
+			if (buffer.allocated != 0)
+				PInvoke.tidyBufFree(ref buffer);
+
 			errBufHandle.Free();
 			errBufHandle = default(GCHandle);
 			buffer = default(TidyBuffer);			

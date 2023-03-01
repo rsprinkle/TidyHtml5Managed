@@ -51,7 +51,7 @@ namespace TidyManaged.Interop
 		internal uint next;         /**< Offset of current input position */
 	}
 
-	internal class PInvoke
+	internal static class PInvoke
 	{
 		static PInvoke()
 		{
@@ -64,34 +64,44 @@ namespace TidyManaged.Interop
         [DllImport("kernel32.dll")]
         private static extern IntPtr LoadLibrary(string dllToLoad);
 
-		[DllImport("tidy.dll")]
+        // Checked
+        [DllImport("tidy.dll")]
 		internal static extern IntPtr tidyCreate();
 
-		[DllImport("tidy.dll")]
-		internal static extern void tidyRelease(IntPtr tdoc);
+        // Checked
+        [DllImport("tidy.dll")]
+        internal static extern void tidyRelease(IntPtr tdoc);
 
+		// Checked
 		[DllImport("tidy.dll")]
 		internal static extern IntPtr tidyReleaseDate();
 
+        // Checked
         [DllImport("tidy.dll")]
         internal static extern IntPtr tidyLibraryVersion();
 
+        // Checked
         [DllImport("tidy.dll")]
 		internal static extern IntPtr tidyOptGetValue(IntPtr tdoc, TidyOptionId optId);
 
-		[DllImport("tidy.dll")]
+        // Checked
+        [DllImport("tidy.dll")]
 		internal static extern bool tidyOptSetValue(IntPtr tdoc, TidyOptionId optId, string val);
 
-		[DllImport("tidy.dll")]
+        // Checked
+        [DllImport("tidy.dll")]
 		internal static extern uint tidyOptGetInt(IntPtr tdoc, TidyOptionId optId);
 
-		[DllImport("tidy.dll")]
+        // Checked
+        [DllImport("tidy.dll")]
 		internal static extern bool tidyOptSetInt(IntPtr tdoc, TidyOptionId optId, uint val);
 
-		[DllImport("tidy.dll")]
+        // Checked
+        [DllImport("tidy.dll")]
 		internal static extern bool tidyOptGetBool(IntPtr tdoc, TidyOptionId optId);
 
-		[DllImport("tidy.dll")]
+        // Checked
+        [DllImport("tidy.dll")]
 		internal static extern bool tidyOptSetBool(IntPtr tdoc, TidyOptionId optId, bool val);
 
         // TIDY_EXPORT void TIDY_CALL tidyBufFree(TidyBuffer* buf);
@@ -102,33 +112,45 @@ namespace TidyManaged.Interop
         /// <param name="buffer"></param>
         /// <param name="buflen"></param>
         /// <returns></returns>
+        // Checked
         [DllImport("tidy.dll")]
         internal static extern void tidyBufFree(ref TidyBuffer buf);
 
+        // Checked
         [DllImport("tidy.dll")]
 		internal static extern int tidyParseFile(IntPtr tdoc, string filename);
 
-		[DllImport("tidy.dll")]
+        // Checked
+        [DllImport("tidy.dll")]
 		internal static extern int tidyParseString(IntPtr tdoc, string content);
 
 		[DllImport("tidy.dll")]
 		internal static extern int tidyParseSource(IntPtr tdoc, ref TidyInputSource source);
 
-		[DllImport("tidy.dll")]
+        [DllImport("tidy.dll")]
+        internal static extern int tidyParseBuffer(IntPtr tdoc, ref TidyBuffer source);
+
+        // Checked
+        [DllImport("tidy.dll")]
 		internal static extern int tidyCleanAndRepair(IntPtr tdoc);
 
-		[DllImport("tidy.dll")]
+        [DllImport("tidy.dll")]
+        internal static extern int tidyRunDiagnostics(IntPtr tdoc);
+
+        [DllImport("tidy.dll")]
 		internal static extern int tidySaveFile(IntPtr tdoc, string filename);
 
-		// // int TIDY_CALL        tidySaveString( TidyDoc tdoc, tmbstr buffer, uint* buflen )
+		// 
 		[DllImport("tidy.dll")]
 		internal static extern int tidySaveString(IntPtr tdoc, IntPtr buffer, ref uint buflen);
 
 		[DllImport("tidy.dll")]
 		internal static extern int tidySaveSink(IntPtr tdoc, ref TidyOutputSink sink);
 
-		// int TIDY_CALL    tidySetErrorBuffer(TidyDoc tdoc, TidyBuffer* errbuf)
-		[DllImport("tidy.dll")]
+        [DllImport("tidy.dll")]
+        internal static extern int tidySaveBuffer(IntPtr tdoc, ref TidyBuffer buffer);
+
+        [DllImport("tidy.dll")]
 		internal static extern int tidySetErrorBuffer(IntPtr tdoc, ref TidyBuffer buffer);
 
         // FILE* TIDY_CALL   tidySetErrorFile(TidyDoc tdoc, ctmbstr errfilnam)
